@@ -548,9 +548,50 @@ function DoneScreen({
   duration,
   words,
   recorded,
+  blob,
+  mime,
   onAgain,
   onHome
 }) {
+  const [saving, setSaving] = useState(false);
+  const [savedHint, setSavedHint] = useState('');
+  const ext = (mime || '').includes('mp4') ? 'mp4' : 'webm';
+  const filename = `teleprompter_${new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')}.${ext}`;
+  const videoUrl = useMemo(() => blob ? URL.createObjectURL(blob) : null, [blob]);
+  const shareVideo = async () => {
+    if (!blob) return;
+    setSaving(true);
+    try {
+      const file = new File([blob], filename, {
+        type: mime || 'video/mp4'
+      });
+      if (navigator.canShare?.({
+        files: [file]
+      }) && navigator.share) {
+        await navigator.share({
+          files: [file],
+          title: 'Vídeo do teleprompter'
+        });
+        setSavedHint('Compartilhado ✓');
+      } else {
+        // fallback: trigger download
+        const a = document.createElement('a');
+        a.href = videoUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setSavedHint('Baixado em Arquivos ✓');
+      }
+    } catch (e) {
+      if (e.name !== 'AbortError') {
+        console.warn(e);
+        setSavedHint('Falhou — tente novamente');
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
   return /*#__PURE__*/React.createElement("div", {
     className: "done-summary",
     "data-screen-label": "05 Done"
@@ -587,23 +628,54 @@ function DoneScreen({
   }), /*#__PURE__*/React.createElement(Stat, {
     label: "WPM",
     value: duration > 0 ? Math.round(words / (duration / 60)) : 0
-  })), recorded && /*#__PURE__*/React.createElement("div", {
+  })), recorded && blob && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 14,
+      width: '100%',
+      maxWidth: 320,
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("video", {
+    src: videoUrl,
+    controls: true,
+    playsInline: true,
+    style: {
+      width: '100%',
+      maxHeight: 180,
+      borderRadius: 12,
+      background: '#111',
+      objectFit: 'cover'
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'rgba(255,255,255,0.5)',
+      fontVariantNumeric: 'tabular-nums'
+    }
+  }, (blob.size / (1024 * 1024)).toFixed(1), " MB \xB7 ", ext.toUpperCase())), recorded && !blob && /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 12,
       padding: '8px 14px',
       borderRadius: 999,
-      background: 'rgba(255,59,48,0.18)',
-      color: '#FF8B83',
+      background: 'rgba(255,149,0,0.18)',
+      color: '#FFB340',
       fontSize: 13,
-      fontWeight: 600,
-      display: 'flex',
-      alignItems: 'center',
-      gap: 6
+      fontWeight: 600
     }
-  }, /*#__PURE__*/React.createElement(Icon.Record, {
-    size: 10,
-    color: "#FF3B30"
-  }), " V\xEDdeo salvo"), /*#__PURE__*/React.createElement("div", {
+  }, "V\xEDdeo n\xE3o foi capturado"), savedHint && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 4,
+      padding: '6px 12px',
+      borderRadius: 999,
+      background: 'rgba(52,199,89,0.18)',
+      color: '#34C759',
+      fontSize: 13,
+      fontWeight: 600
+    }
+  }, savedHint), /*#__PURE__*/React.createElement("div", {
     style: {
       position: 'absolute',
       left: 16,
@@ -613,7 +685,19 @@ function DoneScreen({
       flexDirection: 'column',
       gap: 10
     }
-  }, /*#__PURE__*/React.createElement("button", {
+  }, recorded && blob && /*#__PURE__*/React.createElement("button", {
+    className: "pf-start",
+    style: {
+      position: 'static',
+      background: '#34C759',
+      color: '#fff'
+    },
+    onClick: shareVideo,
+    disabled: saving
+  }, /*#__PURE__*/React.createElement(Icon.Share, {
+    size: 20,
+    color: "#fff"
+  }), saving ? 'Salvando…' : 'Salvar vídeo'), /*#__PURE__*/React.createElement("button", {
     className: "pf-start",
     style: {
       position: 'static'

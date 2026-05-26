@@ -92,7 +92,9 @@ function App() {
   const [showPaste, setShowPaste] = aState(false);
   const [lastSession, setLastSession] = aState({
     duration: 0,
-    words: 0
+    words: 0,
+    blob: null,
+    mime: ''
   });
   const isMobile = useIsMobile();
 
@@ -194,11 +196,13 @@ function App() {
     script: currentScript,
     settings: settings,
     variant: t.variant,
-    onExit: () => {
+    onExit: result => {
       const words = currentScript.body.trim().split(/\s+/).filter(Boolean).length;
       setLastSession({
-        duration: 60,
-        words
+        duration: result?.duration || 0,
+        words,
+        blob: result?.blob || null,
+        mime: result?.mime || ''
       });
       setRoute({
         name: 'done',
@@ -209,6 +213,8 @@ function App() {
     duration: lastSession.duration,
     words: lastSession.words,
     recorded: settings.record,
+    blob: lastSession.blob,
+    mime: lastSession.mime,
     onAgain: () => setRoute({
       name: 'live',
       id: route.id

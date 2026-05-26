@@ -89,7 +89,7 @@ function App() {
   const [scripts, setScripts] = aState(loadScripts);
   const [settings, setSettings] = aState(DEFAULT_SETTINGS);
   const [showPaste, setShowPaste] = aState(false);
-  const [lastSession, setLastSession] = aState({ duration: 0, words: 0 });
+  const [lastSession, setLastSession] = aState({ duration: 0, words: 0, blob: null, mime: '' });
   const isMobile = useIsMobile();
 
   // Persist scripts
@@ -168,9 +168,14 @@ function App() {
           script={currentScript}
           settings={settings}
           variant={t.variant}
-          onExit={() => {
+          onExit={(result) => {
             const words = currentScript.body.trim().split(/\s+/).filter(Boolean).length;
-            setLastSession({ duration: 60, words });
+            setLastSession({
+              duration: result?.duration || 0,
+              words,
+              blob: result?.blob || null,
+              mime: result?.mime || '',
+            });
             setRoute({ name: 'done', id: currentScript.id });
           }}
         />
@@ -180,6 +185,8 @@ function App() {
           duration={lastSession.duration}
           words={lastSession.words}
           recorded={settings.record}
+          blob={lastSession.blob}
+          mime={lastSession.mime}
           onAgain={() => setRoute({ name: 'live', id: route.id })}
           onHome={() => setRoute({ name: 'home' })}
         />

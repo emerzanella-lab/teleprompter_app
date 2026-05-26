@@ -1,4 +1,4 @@
-// live.jsx — Live teleprompter screen w/ 3 variants
+// live.jsx — Live teleprompter screen w/ 3 variants + optional recording
 
 const {
   useState: lsState,
@@ -8,8 +8,8 @@ const {
   useCallback: lsCB
 } = React;
 
-// ─── Camera hook ──────────────────────────────────────────────────────
-function useCamera(enabled, frontCamera) {
+// ─── Camera + Audio hook ──────────────────────────────────────────────
+function useCamera(enabled, frontCamera, withAudio) {
   const [stream, setStream] = lsState(null);
   const [error, setError] = lsState(null);
   lsEffect(() => {
@@ -21,9 +21,15 @@ function useCamera(enabled, frontCamera) {
     let s;
     navigator.mediaDevices?.getUserMedia({
       video: {
-        facingMode: frontCamera ? 'user' : 'environment'
+        facingMode: frontCamera ? 'user' : 'environment',
+        width: {
+          ideal: 1920
+        },
+        height: {
+          ideal: 1080
+        }
       },
-      audio: false
+      audio: !!withAudio
     }).then(streamObj => {
       if (!active) {
         streamObj.getTracks().forEach(t => t.stop());
@@ -39,14 +45,110 @@ function useCamera(enabled, frontCamera) {
       active = false;
       if (s) s.getTracks().forEach(t => t.stop());
     };
-  }, [enabled, frontCamera]);
+  }, [enabled, frontCamera, withAudio]);
   return {
     stream,
     error
   };
 }
 
-// ─── Recorder timer ───────────────────────────────────────────────────
+// ─── MediaRecorder hook ──────────────────────────────────────────────
+function pickMime() {
+  const candidates = ['video/mp4;codecs=avc1,mp4a', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
+  for (const m of candidates) {
+    if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(m)) return m;
+  }
+  return '';
+}
+function useRecorder(stream, enabled, recording) {
+  const recRef = lsRef(null);
+  const chunksRef = lsRef([]);
+  const mimeRef = lsRef('');
+  const stopResolversRef = lsRef([]);
+  const [blob, setBlob] = lsState(null);
+  const [mime, setMime] = lsState('');
+  const [supported, setSupported] = lsState(true);
+
+  // Create / destroy recorder when stream + enabled changes
+  lsEffect(() => {
+    setBlob(null);
+    if (!enabled || !stream) return;
+    if (typeof MediaRecorder === 'undefined') {
+      setSupported(false);
+      return;
+    }
+    const m = pickMime();
+    setMime(m);
+    mimeRef.current = m;
+    let rec;
+    try {
+      rec = new MediaRecorder(stream, m ? {
+        mimeType: m
+      } : undefined);
+    } catch (e) {
+      console.warn('MediaRecorder failed:', e.message);
+      setSupported(false);
+      return;
+    }
+    chunksRef.current = [];
+    rec.ondataavailable = e => {
+      if (e.data?.size > 0) chunksRef.current.push(e.data);
+    };
+    rec.onstop = () => {
+      const b = new Blob(chunksRef.current, {
+        type: m || 'video/mp4'
+      });
+      setBlob(b);
+      // resolve any pending stop() promises
+      const resolvers = stopResolversRef.current;
+      stopResolversRef.current = [];
+      resolvers.forEach(r => r(b));
+    };
+    recRef.current = rec;
+    return () => {
+      try {
+        if (rec.state !== 'inactive') rec.stop();
+      } catch {}
+      recRef.current = null;
+    };
+  }, [enabled, stream]);
+
+  // Start/pause/resume tied to `recording`
+  lsEffect(() => {
+    const rec = recRef.current;
+    if (!rec) return;
+    try {
+      if (recording && rec.state === 'inactive') rec.start(1000);else if (!recording && rec.state === 'recording') rec.pause();else if (recording && rec.state === 'paused') rec.resume();
+    } catch (e) {
+      console.warn(e);
+    }
+  }, [recording]);
+
+  // stop() returns a Promise<Blob | null> that resolves once onstop fires
+  const stop = lsCB(() => {
+    return new Promise(resolve => {
+      const rec = recRef.current;
+      if (!rec || rec.state === 'inactive') {
+        resolve(null);
+        return;
+      }
+      stopResolversRef.current.push(resolve);
+      try {
+        rec.stop();
+      } catch {
+        resolve(null);
+      }
+    });
+  }, []);
+  return {
+    blob,
+    mime,
+    stop,
+    supported
+  };
+}
+
+// ─── Elapsed-time ticker ──────────────────────────────────────────────
 function useTicker(running) {
   const [elapsed, setElapsed] = lsState(0);
   const startRef = lsRef(null);
@@ -80,24 +182,25 @@ function LiveScreen({
   const [showControls, setShowControls] = lsState(true);
   const [elapsed, setElapsed] = useTicker(playing);
 
-  // live-tweakable settings (override pre-flight while in live)
+  // live-tweakable settings
   const [fontSize, setFontSize] = lsState(settings.fontSize);
   const [speed, setSpeed] = lsState(settings.speed);
   const [textPos, setTextPos] = lsState(settings.textPosition ?? 50);
   const videoRef = lsRef(null);
   const {
-    stream,
-    error: camError
-  } = useCamera(settings.camera, settings.frontCamera);
-
-  // attach stream
+    stream
+  } = useCamera(settings.camera, settings.frontCamera, settings.record);
+  const {
+    blob,
+    mime,
+    stop: stopRec,
+    supported: recSupported
+  } = useRecorder(stream, settings.record, playing);
   lsEffect(() => {
-    if (videoRef.current && stream) {
-      videoRef.current.srcObject = stream;
-    }
+    if (videoRef.current && stream) videoRef.current.srcObject = stream;
   }, [stream]);
 
-  // Countdown timer
+  // Countdown
   lsEffect(() => {
     if (countdown <= 0) {
       if (settings.countdown > 0 && !playing) setPlaying(true);
@@ -108,14 +211,12 @@ function LiveScreen({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [countdown]);
 
-  // Auto-hide controls after a few seconds while playing
+  // Auto-hide controls
   lsEffect(() => {
     if (!playing || !showControls) return;
     const t = setTimeout(() => setShowControls(false), 3000);
     return () => clearTimeout(t);
   }, [playing, showControls]);
-
-  // Reset everything
   const reset = () => {
     setPlaying(false);
     setElapsed(0);
@@ -126,6 +227,23 @@ function LiveScreen({
     setPlaying(!playing);
     setShowControls(true);
   };
+
+  // Finish: stop recorder, hand blob to parent via onExit
+  const finish = async () => {
+    setPlaying(false);
+    let recordedBlob = null;
+    if (settings.record) {
+      recordedBlob = await stopRec();
+    }
+    onExit({
+      blob: recordedBlob,
+      mime,
+      duration: elapsed
+    });
+  };
+
+  // (blobReadyRef no longer needed — stop() resolves with the blob directly)
+
   const wordCount = lsMemo(() => script.body.trim().split(/\s+/).filter(Boolean).length, [script.body]);
   return /*#__PURE__*/React.createElement("div", {
     className: "live",
@@ -189,16 +307,22 @@ function LiveScreen({
     className: "live-top"
   }, /*#__PURE__*/React.createElement("button", {
     className: "live-pill-icon",
-    onClick: onExit,
+    onClick: () => finish(),
     "aria-label": "Sair"
   }, /*#__PURE__*/React.createElement(Icon.Close, {
     size: 16,
     color: "#fff"
-  })), settings.record && /*#__PURE__*/React.createElement("div", {
+  })), settings.record && recSupported && /*#__PURE__*/React.createElement("div", {
     className: "rec-chip"
   }, /*#__PURE__*/React.createElement("div", {
     className: "rec-dot"
-  }), "REC ", fmtTime(elapsed)), /*#__PURE__*/React.createElement("button", {
+  }), "REC ", fmtTime(elapsed)), settings.record && !recSupported && /*#__PURE__*/React.createElement("div", {
+    className: "rec-chip",
+    style: {
+      background: 'rgba(255,149,0,0.3)',
+      color: '#FFB340'
+    }
+  }, "Grava\xE7\xE3o indispon\xEDvel"), /*#__PURE__*/React.createElement("button", {
     className: "live-pill-icon",
     onClick: reset,
     "aria-label": "Reiniciar"
@@ -338,7 +462,7 @@ function LiveScreen({
     size: 32,
     color: settings.record ? '#fff' : '#000'
   })), /*#__PURE__*/React.createElement("button", {
-    onClick: onExit,
+    onClick: () => finish(),
     style: {
       flex: 1,
       textAlign: 'right'
@@ -363,9 +487,7 @@ function LiveScreen({
   }, "Toque para mostrar controles"));
 }
 
-// ─── Variant: Classic vertical scroll ─────────────────────────────────
-// pixels per second computed from font size & speed multiplier so that
-// at speed 1.0, we read ~150 WPM (about 1 line per ~3 seconds).
+// ─── Variants ─────────────────────────────────────────────────────────
 function ClassicScroll({
   body,
   fontSize,
@@ -377,21 +499,16 @@ function ClassicScroll({
   const containerRef = lsRef(null);
   const contentRef = lsRef(null);
   const [containerH, setContainerH] = lsState(700);
-  const [contentH, setContentH] = lsState(0);
   lsEffect(() => {
     const measure = () => {
       if (containerRef.current) setContainerH(containerRef.current.clientHeight);
-      if (contentRef.current) setContentH(contentRef.current.scrollHeight);
     };
     measure();
     const ro = new ResizeObserver(measure);
     if (contentRef.current) ro.observe(contentRef.current);
     return () => ro.disconnect();
   }, [body, fontSize]);
-
-  // Scroll: start at halfway down (so first line lands at center marker),
-  // go negative by px = elapsed * pxPerSec
-  const pxPerSec = fontSize * 0.6 * speed; // ~one font-size unit every ~1.7s at 1x
+  const pxPerSec = fontSize * 0.6 * speed;
   const anchor = containerH * (textPos / 100);
   const offset = playing || elapsed > 0 ? anchor - elapsed * pxPerSec : anchor;
   return /*#__PURE__*/React.createElement("div", {
@@ -407,10 +524,9 @@ function ClassicScroll({
     className: "tp-scroll",
     style: {
       transform: `translateY(${offset}px)`,
-      fontSize: fontSize,
+      fontSize,
       lineHeight: 1.35,
       willChange: 'transform'
-      // we don't transition during play; transition only the pause case via JS would be too tricky.
     }
   }, body.split(/\n\n+/).map((para, i) => /*#__PURE__*/React.createElement("p", {
     key: i
@@ -420,29 +536,9 @@ function ClassicScroll({
     }
   })));
 }
-
-// ─── Variant: Focus band ──────────────────────────────────────────────
-// Identical scrolling, but uses a wider center band rather than triangles.
-// The text in the focus band naturally appears clearer due to the band overlay.
-function FocusScroll({
-  body,
-  fontSize,
-  speed,
-  playing,
-  elapsed,
-  textPos = 50
-}) {
-  return /*#__PURE__*/React.createElement(ClassicScroll, {
-    body: body,
-    fontSize: fontSize,
-    speed: speed,
-    playing: playing,
-    elapsed: elapsed,
-    textPos: textPos
-  });
+function FocusScroll(props) {
+  return /*#__PURE__*/React.createElement(ClassicScroll, props);
 }
-
-// ─── Variant: Karaoke (word-by-word highlight, auto-center) ───────────
 function KaraokeScroll({
   body,
   fontSize,
@@ -456,9 +552,8 @@ function KaraokeScroll({
   const [activeIdx, setActiveIdx] = lsState(0);
   const [offset, setOffset] = lsState(0);
   const tokens = lsMemo(() => {
-    // Split into tokens that preserve paragraph breaks
     const out = [];
-    body.split(/\n\n+/).forEach((para, pi) => {
+    body.split(/\n\n+/).forEach(para => {
       para.split(/\s+/).filter(Boolean).forEach(w => out.push({
         kind: 'word',
         text: w
@@ -470,23 +565,17 @@ function KaraokeScroll({
     return out;
   }, [body]);
   const words = lsMemo(() => tokens.filter(t => t.kind === 'word'), [tokens]);
-
-  // 150 WPM at speed 1.0 = 2.5 words/sec
   const wordsPerSec = 2.5 * speed;
   const currentWord = Math.min(words.length - 1, Math.floor(elapsed * wordsPerSec));
   lsEffect(() => {
     setActiveIdx(currentWord);
   }, [currentWord]);
-
-  // Center the active word at textPos
   lsEffect(() => {
     if (!containerRef.current) return;
     const el = wordRefs.current[activeIdx];
     if (!el) return;
     const cH = containerRef.current.clientHeight;
-    const wordTop = el.offsetTop;
-    const wordH = el.offsetHeight;
-    setOffset(cH * (textPos / 100) - wordTop - wordH / 2);
+    setOffset(cH * (textPos / 100) - el.offsetTop - el.offsetHeight / 2);
   }, [activeIdx, fontSize, textPos]);
   let wIdx = -1;
   return /*#__PURE__*/React.createElement("div", {
@@ -502,7 +591,7 @@ function KaraokeScroll({
     style: {
       transform: `translateY(${offset}px)`,
       transition: 'transform 0.35s cubic-bezier(.3,.7,.4,1)',
-      fontSize: fontSize,
+      fontSize,
       lineHeight: 1.4,
       padding: '0 28px'
     }
