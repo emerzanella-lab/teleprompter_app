@@ -37,6 +37,27 @@ html, body {
   -webkit-font-smoothing: antialiased;
   color: var(--label);
   min-height: 100vh;
+  overscroll-behavior: none;
+}
+
+/* On mobile, fill the viewport completely */
+@media (max-width: 500px) {
+  html, body {
+    background: var(--bg);
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+  }
+  /* iOS nav padding tuned for real iPhone (status bar + dynamic island) */
+  .ios-nav { padding-top: max(60px, env(safe-area-inset-top, 60px)) !important; }
+  .preflight-nav { padding-top: max(60px, env(safe-area-inset-top, 60px)) !important; }
+  .live-top { padding-top: max(60px, env(safe-area-inset-top, 60px)) !important; }
+  /* Bottom buttons clear home indicator */
+  .pf-start { bottom: max(32px, env(safe-area-inset-bottom, 16px)) !important; }
+  .fab { bottom: max(28px, calc(env(safe-area-inset-bottom, 0px) + 16px)) !important; }
+  .live-controls { padding-bottom: max(28px, calc(env(safe-area-inset-bottom, 0px) + 16px)) !important; }
+  .done-summary > div:last-child { bottom: max(40px, env(safe-area-inset-bottom, 16px)) !important; }
+  .sheet { padding-bottom: max(34px, env(safe-area-inset-bottom, 16px)) !important; }
 }
 
 button {

@@ -72,6 +72,16 @@ function saveScripts(s) {
     localStorage.setItem('tp:scripts', JSON.stringify(s));
   } catch {}
 }
+function useIsMobile() {
+  const [m, setM] = aState(typeof window !== 'undefined' && window.matchMedia('(max-width: 500px)').matches);
+  aEffect(() => {
+    const mq = window.matchMedia('(max-width: 500px)');
+    const fn = e => setM(e.matches);
+    mq.addEventListener('change', fn);
+    return () => mq.removeEventListener('change', fn);
+  }, []);
+  return m;
+}
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const [route, setRoute] = aState({
@@ -84,6 +94,7 @@ function App() {
     duration: 0,
     words: 0
   });
+  const isMobile = useIsMobile();
 
   // Persist scripts
   aEffect(() => {
@@ -138,11 +149,9 @@ function App() {
 
   // Density class for entire phone interior
   const densityClass = `density-${t.density}`;
-  return /*#__PURE__*/React.createElement("div", {
-    className: "stage"
-  }, /*#__PURE__*/React.createElement(IOSDevice, {
-    dark: false
-  }, /*#__PURE__*/React.createElement("div", {
+
+  // Shared content (all screens) — used both in mobile fullscreen and desktop frame
+  const screens = /*#__PURE__*/React.createElement("div", {
     className: densityClass,
     style: {
       position: 'absolute',
@@ -210,9 +219,33 @@ function App() {
   }), showPaste && /*#__PURE__*/React.createElement(PasteSheet, {
     onClose: () => setShowPaste(false),
     onPaste: newFromPaste
-  }))), /*#__PURE__*/React.createElement(TweaksPanel, {
+  }));
+
+  // On a real phone, render fullscreen — no fake iOS frame
+  if (isMobile) {
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: 'fixed',
+        inset: 0,
+        background: 'var(--bg)',
+        overflow: 'hidden'
+      }
+    }, screens, /*#__PURE__*/React.createElement(TweaksPanel, {
+      title: "Tweaks"
+    }, tweakBody(t, setTweak, setScripts, setRoute)));
+  }
+  return /*#__PURE__*/React.createElement("div", {
+    className: "stage"
+  }, /*#__PURE__*/React.createElement(IOSDevice, {
+    dark: false
+  }, screens), /*#__PURE__*/React.createElement(TweaksPanel, {
     title: "Tweaks"
-  }, /*#__PURE__*/React.createElement(TweakSection, {
+  }, tweakBody(t, setTweak, setScripts, setRoute)));
+}
+
+// Tweaks body (shared between mobile + desktop)
+function tweakBody(t, setTweak, setScripts, setRoute) {
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(TweakSection, {
     label: "Tela de leitura"
   }), /*#__PURE__*/React.createElement(TweakRadio, {
     label: "Varia\xE7\xE3o",
@@ -265,7 +298,7 @@ function App() {
         });
       }
     }
-  })));
+  }));
 }
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(/*#__PURE__*/React.createElement(App, null));
